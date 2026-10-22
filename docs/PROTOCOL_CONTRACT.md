@@ -7,10 +7,18 @@ ESP32 upstream: `TSDZ2-ESP32/TSDZ2-ESP32-Main`, commit
 `25c0ac430e10d93546891635caa76534ee2ecf27`, version `1.2.2`.
 Android handoff evidence: imported commit `58692d5d0dd4209d9c96d91a3336998a6e9a3357`.
 
-This is a source audit, not a hardware acceptance test. All controller wire-field
-meanings are **ESP32-side verified only**: they describe what this gateway writes
-or interprets. Actual STM8 processing, control laws, electrical levels and
-bootloader compatibility are not independently proven by this baseline.
+This is a source audit, not a hardware acceptance test. The original ESP32 audit
+commit `4addc25bf37ad2f6232863c9b7517b695a290e99` is preserved in history. This
+revision cross-checks original-author STM8 `TSDZ2-ESP32/TSDZ2-Smart-EBike`, branch
+`master`, exact commit `3df3083ad220856eb416692aa6d5ad73f5fdd1fc`, numericFW17
+(**WIP**, no tag at that commit). See [STM8 cross-check](STM8_PROTOCOL_CROSSCHECK.md)
+for provenance, reciprocal assignments, formulas and conflicts.
+
+Evidence labels: **VERIFIED BOTH SIDES** means reciprocal source agreement;
+**ESP32-SIDE ONLY** means gateway-local policy; **STM8-SIDE ONLY** means controller
+computation/policy; **UNKNOWN** means not established. Source agreement does not
+prove a stable binary-release pairing, hardware operation or electrical tolerance.
+This WIP forces brake0 and retains normal assist modes on command loss.
 
 References below are baseline line numbers relative to `esp32-gateway/main/`:
 
@@ -24,6 +32,13 @@ References below are baseline line numbers relative to `esp32-gateway/main/`:
 | O/OH | `tsdz_ota_stm8.c/.h`: `ota_stm8_init`, `ota_stm8_start`, `stm8_ota_task`, BSL helpers, `stm8_ota_status` |
 | M/MH | `main.c`: `app_main`, `mainTask`; `main.h`: mode/error/ADC constants |
 | CRC | `tsdz_utils.c:79–97`: `crc16`; declaration `tsdz_utils.h:18` |
+
+`S:` references below mean selected STM8 `src/ebike_app.c`: `uart_receive_package`
+1579–1775, `uart_send_package`1793–1980, `communications_controller`1550–1571.
+Other STM8 files are explicitly prefixed. B/C/F field mappings and D CRC are
+**VERIFIED BOTH SIDES** against these reciprocal paths and STM8 `src/common.h:13–37`;
+extra controller calculations are **STM8-SIDE ONLY**. ESP32 compensation, its
+LCD/app mode selection and its independent timeout are **ESP32-SIDE ONLY**.
 
 All eleven requested files were read in full, including the full OTA implementation.
 `main.c`, relevant BLE dispatch and Android OTA call sites were followed as well.
@@ -49,11 +64,23 @@ All eleven requested files were read in full, including the full OTA implementat
 Names are remote-endpoint-oriented: do not wire ESP32 TX27/RX25 by reading macro
 names alone. Electrical voltage levels/tolerance are **UNKNOWN**.
 U:88–89 comments describe10msg/sec, but actual code is LCD-event-driven plus a
->100ms fallback sampled by the20ms loop, not an exact100ms timer. STM8 TX cadence
-is not established. Calculated serialization at9600 8N1 is13.54ms for13 bytes and
+fallback after >100ms sampled by the20ms loop, not an exact100ms ESP32 timer.
+STM8 TX is independently nominal100ms: STM8 `src/main.c:102–111` runs controller
+every25ms; S:374,1556–1558 sends every fourth call, independent of commands, with
+busy-send skip S:1797–1799. STM8 UART2 is9600 8N1 (`src/uart.c:17–25`), PD5 TX/PD6 RX
+(`src/pins.h:93–96`). Controller scheduling/pins are **STM8-SIDE ONLY**; serial
+format is **VERIFIED BOTH SIDES**. Calculated serialization at9600 8N1 is13.54ms for13 bytes and
 30.21ms for29 bytes; these are calculations, not measured timings.
 Bad CRC increments `ui8_rxc_errors` without refreshing the timeout timestamp
 (U:130–143). Parser state persists across polling calls.
+
+**STM8-SIDE ONLY command-loss policy:** S:`communications_controller`:1546–1570
+increments uint8 counter each25ms call; valid CRC reception resets it/error
+(S:1592–1594). Counter>20 (21 missed calls, nominal525ms) sets wireRX-error bit2.
+POWER/TORQUE/CADENCE/eMTB modes1..4 remain active with cached parameter/config;
+others are setOFF. TX is attempted before this check, so status may lag one send.
+Counter wraps256; error remains set until a valid command clears it. This is
+distinct from the **ESP32-SIDE ONLY** status timeout above; not all assist stops.
 
 ## B. ESP32 → STM8: 13-byte packet
 
@@ -70,7 +97,7 @@ unsigned N-bit storage permits0..2^N−1, not a proven safe controller setting r
 | 1 | 7:0 | 8 | — | Message ID | 0→1→2→3→4→5→0, starts0; advances per builder call, no ACK | D:139,508–509,719–720 |
 | 2 | 7:0 | 8 | — | Riding mode | 0..7 in F; locked→OFF, else app calibration→7, else level0→OFF, else internal mode &0x7f | D:511–520 |
 | 3 | 7:0 | 8 | — | Assist parameter | Mode-dependent table below; not raw LCD assist level | D:522–567 |
-| 4 | 6:0 | 7 | — | Lights config | `ui8_lights_configuration &0x7f`; individual meanings UNKNOWN | D:569–572 |
+| 4 | 6:0 | 7 | — | Lights config | `ui8_lights_configuration &0x7f`; enum0..8, not individual flags; STM8 `ebike_control_lights`1322–1485 (cross-check §4) | D:569–572 |
 | 4 | 7 | 1 | — | Lights state | 1 when OEM lights on | D:250–251 `processLcdMessage`; D:571–572 |
 | 5..10 | 7:0 each | 6×8 | Per ID | Payload | Every byte mapped below | D:574–706 |
 | 11 | 7:0 | 8 | LE low | CRC | Over bytes0..10 | D:708–717 |
@@ -83,14 +110,14 @@ unless another function is named.
 
 | Mode | Byte3 source/value | Proven scaling/qualification | Source |
 |---|---|---|---|
-| OFF0 | 0 | No parameter | D:562–565 |
-| POWER1 | `ui8_power_assist_level[level-1]` | Initializer comment `%/2`:25→50% | D:116,524–530 |
-| TORQUE2 | `ui8_torque_assist_level[level-1]` | Raw; physical conversion UNKNOWN | D:117,538–544 |
-| CADENCE3 | `ui8_cadence_assist_level[level-1]` | Initializer comment `W/2`:50→100W | D:115,531–537 |
-| eMTB4 | `ui8_eMTB_assist_sensitivity[level-1]` | Raw sensitivity; conversion UNKNOWN | D:118,545–551 |
-| WALK5 | `ui8_walk_assist_level[level-1]` | Raw; conversion UNKNOWN | D:119,552–558 |
-| CRUISE6 | 0 | No parameter | D:562–565 |
-| MOTOR_CALIBRATION7 | `ui8_app_assist_parameter` | Raw command byte; physical conversion UNKNOWN | D:559–561; C:181–197 `command_motor_calibration` |
+| OFF0 | 0 | No mode assist parameter; controller targets start0 before optional ADC processing (S:392–435) | D:562–565 |
+| POWER1 | `ui8_power_assist_level[level-1]` | Nominal2% steps; STM8 actual power_x100=(cadence×parameter×torque_x100)>>9 (S:523–555) | D:116,524–530 |
+| TORQUE2 | `ui8_torque_assist_level[level-1]` | Current target_ADC=torque_delta_ADC×parameter/110 (S:608–627 `apply_torque_assist`) | D:117,538–544 |
+| CADENCE3 | `ui8_cadence_assist_level[level-1]` | ×2W; STM8 clamps parameter200, requires cadence (S:507–520) | D:115,531–537 |
+| eMTB4 | `ui8_eMTB_assist_sensitivity[level-1]` | LUT selector1..20→tables160..255, indexed torque_delta_ADC+10 (S:696–798) | D:118,545–551 |
+| WALK5 | `ui8_walk_assist_level[level-1]` | Duty target capped80, wheel speed<8km/h (S:847–869 `apply_walk_assist`) | D:119,552–558 |
+| CRUISE6 | 0 | ESP32 sends0; STM8 parameter0 captures current speed, nonzero requests km/h (S:897–905) | D:562–565 |
+| MOTOR_CALIBRATION7 | `ui8_app_assist_parameter` | Raw duty target; STM8≥254 clamps253 (S:676–693 `apply_calibration_assist`) | D:559–561; C:181–197 `command_motor_calibration` |
 
 Array modes write0 for level0. Normal OEM input establishes levels0..4
 (D:180–196 `processLcdMessage`; DH OEM masks); builder has no additional array
@@ -103,22 +130,22 @@ upper-bound check. These values are not universally percentages.
 | 5 | 7:0 | 8 | LE low | Battery low voltage cutoff | Combined5–6 `ui16_battery_low_voltage_cut_off_x10`, /10V | D:576–578 |
 | 6 | 7:0 | 8 | LE high | Cutoff high | Same16-bit value | D:577–578 |
 | 7 | 7:0 | 8 | — | Max battery current | Amps; configured current or temperature-mapped current→0 between min/max when ESP32 temp control on | D:580–588; `tsdz_utils.c:53–65` `map` |
-| 8 | 7:0 | 8 | — | Battery power limit | `*_div25`, name-derived ×25W; street power if internal street flag and limit enabled, otherwise target max | D:590–595 |
-| 9 | 7:0 | 8 | — | FOC multiplicator / inductance setting | Raw; inductance conversion UNKNOWN; config update rejects >50 | D:597–598,754 `tsdz_update_cfg` |
-| 10 | 7:0 | 8 | — | Motor acceleration | Raw; physical/time units UNKNOWN | D:600–601 |
+| 8 | 7:0 | 8 | — | Battery power limit | ×25W verified at S:1618–1626; street power if internal street flag and limit enabled, otherwise target max | D:590–595 |
+| 9 | 7:0 | 8 | — | FOC multiplicator / inductance setting | Controller caps50; phase-current×coefficient/256 feeds filtered angle; inductance calibration UNKNOWN (S:1628–1632; STM8 `src/motor.c:682–730`) | D:597–598,754 `tsdz_update_cfg` |
+| 10 | 7:0 | 8 | — | Motor acceleration | 0..100 maps to inverse PWM ramp DEFAULT→MIN, clamped endpoints (S:1634–1641; STM8 `src/common.c:36–50`) | D:600–601 |
 
 ### ID1
 
 | Offset | Bits | Width | Endian | Field | Unit/scaling, value meaning | Source |
 |---|---|---|---|---|---|---|
-| 5 | 7:0 | 8 | — | Free/future use | Normally0; if `DEADTIME_TEST` and mode7, app rotor adjustment instead; units UNKNOWN | D:605–612 |
+| 5 | 7:0 | 8 | — | Free/future use | Normally0; DEADTIME_TEST/mode7 maps to deadtime register clamp(uint8(24+raw),14,32); physical timing unverified | D:605–612; S:1648–1663 |
 | 6 | 0 | 1 | — | Field weakening enable | Config flags bit1 (`0x02`) | D:617,622–623 |
 | 6 | 6:1 | 6 | — | Unset | Explicitly zero in this sender | D:617–623 |
 | 6 | 7 | 1 | — | OTA reboot request | Set if `stm8_ota_status>0`, increments status each such ID1 | D:618–620 |
 | 7 | 7:0 | 8 | LE low | Wheel perimeter | Combined7–8 raw16-bit; mm corroborated by Android `res/values/strings.xml:170` | D:625–627 |
 | 8 | 7:0 | 8 | LE high | Perimeter high | Same value | D:626–627 |
-| 9 | 7:0 | 8 | — | Wheel max speed | km/h inferred from gateway config usage; street max if internal street flag, else max | D:629–633; D:253–267 `processLcdMessage` |
-| 10 | 7:0 | 8 | — | Assist without pedal rotation threshold | Raw; physical scale UNKNOWN | D:635–636 |
+| 9 | 7:0 | 8 | — | Wheel max speed | km/h verified by S:1025–1033,1687–1688; street max if internal street flag, else max | D:629–633; D:253–267 `processLcdMessage` |
+| 10 | 7:0 | 8 | — | Assist without pedal rotation threshold | Nonzero≤100 allows synthetic cadence at rest if torque_delta_ADC>110−threshold; >100 disables (S:1690–1693,525–529,613–617,701–705) | D:635–636 |
 
 Correction: D:614 comment says byte5 for flags, but actual assignments use **byte6**.
 
@@ -132,12 +159,12 @@ Correction: D:614 comment says byte5 for flags, but actual assignments use **byt
 | 8 | 7:0 | 8 | LE low | Torque offset low | Raw ADC offset low8 bits | D:651–653 |
 | 9 | 6:0 | 7 | LE high | Torque offset high | Combined15-bit value,0..32767 | D:652–653 |
 | 9 | 7 | 1 | — | Torque offset fix enable | Config flags bit0 | D:654–656 |
-| 10 | 7:0 | 8 | — | Torque ADC conversion | `ui8_pedal_torque_per_10_bit_ADC_step_x100`; name records ×100/per10-bit ADC step; exact STM8 physical calibration UNKNOWN | D:658–659 |
+| 10 | 7:0 | 8 | — | Torque ADC conversion | Nm×100 per deltaADC step; torque_x100=delta×factor; calibration accuracy UNKNOWN (S:1241–1242,1715–1716; STM8 `src/main.h:168–175`) | D:658–659 |
 
 ### ID3
 
 Reference array order is Hall states **6,2,3,1,5,4** (D:122 initializer). These are
-raw circular angle codes, not proven degrees. Valid references yield reference+adj,
+raw circular angle codes,360/256 electrical degrees/code (STM8 `src/motor.c:24,377`; `src/main.h:25–31`). Valid references yield reference+adj,
 narrowed to uint8_t (modulo256); invalid references yield six zeros. With no
 `DEADTIME_TEST`, mode7 uses app rotor adjustment; otherwise config phase adjustment
 (D:663–685). No local definition of that build macro was found; an external build
@@ -159,7 +186,7 @@ without proving STM8 signed interpretation.
 
 ### ID4
 
-Raw Hall counter offsets; physical time unit UNKNOWN. Same Hall array order
+Raw Hall counter offsets;4µs ticks (STM8 `src/timers.c:54–63`). Same Hall array order
 (D:123). Each sum narrows modulo256. Source: D:`getControllerMessage`.
 
 | Offset | Bits | Width | Endian | Field | Unit/scaling, value meaning | Source |
@@ -176,16 +203,16 @@ Raw Hall counter offsets; physical time unit UNKNOWN. Same Hall array order
 | Offset | Bits | Width | Endian | Field | Unit/scaling, value meaning | Source |
 |---|---|---|---|---|---|---|
 | 5 | 7:0 | 8 | — | Torque smooth enable | Exactly0/1 from config flags bit2 | D:697–702 `getControllerMessage` |
-| 6 | 7:0 | 8 | — | Torque smooth min | Raw; Android UI calls minimum ADC threshold; STM8 formula UNKNOWN | D:703; Android `res/values/strings.xml:164` |
-| 7 | 7:0 | 8 | — | Torque smooth max | Raw; Android UI calls maximum ADC difference threshold; formula UNKNOWN | D:704; Android `res/values/strings.xml:165` |
-| 8 | 7:0 | 8 | — | UNKNOWN / UNUSED by ID5 builder | Unassigned, not guaranteed0 | D:696–705; U:33 |
-| 9 | 7:0 | 8 | — | UNKNOWN / UNUSED by ID5 builder | Unassigned, not guaranteed0 | D:696–705; U:33 |
-| 10 | 7:0 | 8 | — | UNKNOWN / UNUSED by ID5 builder | Unassigned, not guaranteed0 | D:696–705; U:33 |
+| 6 | 7:0 | 8 | — | Torque smooth min | Requires clipped deltaADC>min and80 stored samples (S:1223–1224,1760) | D:703; Android `res/values/strings.xml:164` |
+| 7 | 7:0 | 8 | — | Torque smooth max | Absolute ADC difference from previous stroke same position<max, substitute sum/80 (S:1225–1232,1761) | D:704; Android `res/values/strings.xml:165` |
+| 8 | 7:0 | 8 | — | UNUSED by both payload implementations | Unassigned by ESP32 ID5; no STM8 semantic reads, CRC still covers it (S:1758–1766) | D:696–705; U:33 |
+| 9 | 7:0 | 8 | — | UNUSED by both payload implementations | Unassigned by ESP32 ID5; no STM8 semantic reads, CRC still covers it (S:1758–1766) | D:696–705; U:33 |
+| 10 | 7:0 | 8 | — | UNUSED by both payload implementations | Unassigned by ESP32 ID5; no STM8 semantic reads, CRC still covers it (S:1758–1766) | D:696–705; U:33 |
 
 U:33 defines one static zero-initialized `ct_send_msg`, reused by both send sites.
 In normal0..5 rotation, ID5 bytes8..10 retain ID4 bytes8..10 (Hall offsets indices3..5
-plus adjustment). This is a storage side effect, **not** a defined ID5 semantic or
-proof STM8 ignores those bytes. CRC covers them. Simulator must not reject valid
+plus adjustment). This is a storage side effect, not a defined ID5 field. STM8
+explicitly leaves them unused (S:1758–1766); only generic CRC reads them. Simulator must not reject valid
 ID5 merely because these bytes are nonzero.
 
 ## C. STM8 → ESP32: 29-byte packet
@@ -193,35 +220,36 @@ ID5 merely because these bytes are nonzero.
 UH:21,25 and U:`ctMessageReceived` establish header0x43 and length29.
 `checkCRC16` validates bytes0..26 against27 low/28 high before D's parser runs.
 Unsigned multi-byte values are LE. No semantic range checks beyond framing/CRC
-are applied here. Units describe gateway conventions, **ESP32-side verified only**.
+are applied here. Layout is **VERIFIED BOTH SIDES** against S:1824–1974; controller
+origins/scales are **STM8-SIDE ONLY** refinements in cross-check §5.
 All D references in this section mean `processControllerMessage`.
 
 | Offset | Bits | Width | Endian | Field | Unit/scaling, value meaning | Source |
 |---|---|---|---|---|---|---|
 | 0 | 7:0 | 8 | — | Header | Fixed0x43 | UH:21; U:211–217 |
 | 1 | 1:0 | 2 | — | Message type | 0 normal;1 Hall calibration;2/3 unhandled/UNKNOWN | D:369–373,439–500 |
-| 1 | 2 | 1 | — | Controller UART RX error | 1→local bit4 | D:378–381 |
-| 1 | 3 | 1 | — | Brake | 1→local bit5 | D:374–377 |
+| 1 | 2 | 1 | — | Controller UART RX error | Missing valid command frames>20 controller calls;1→local bit4 | D:378–381; S:1561–1570,1841–1843 |
+| 1 | 3 | 1 | — | Brake | 1→local bit5; selected WIP forces source brake0 | D:374–377; STM8 `src/motor.c:742–753` |
 | 1 | 7:4 | 4 | — | Controller error nibble | →local bits3:0 | D:382–383 |
 | 2 | 7:0 | 8 | LE low | Battery voltage low | Combined2–3 /1000V; gateway adds compensation below | D:388–391 |
 | 3 | 7:0 | 8 | LE high | Battery voltage high | Same16-bit value | D:391 |
 | 4 | 7:0 | 8 | — | Battery current | /10A, representable0..25.5A | D:385–386 |
 | 5 | 7:0 | 8 | LE low | Wheel speed low | Combined5 + ((6 &7)<<8), /10km/h | D:397–400 |
 | 6 | 2:0 | 3 | LE high | Wheel speed high | 11-bit total0..2047, /10km/h | D:398–400 |
-| 6 | 7:3 | 5 | — | FOC angle | Raw0..31; physical angular scale UNKNOWN | D:399–402 |
+| 6 | 7:3 | 5 | — | FOC angle | Capacity0..31, controller normally≤15;360/256 electrical degrees/code (S:1859; STM8 `src/motor.c:377,682–730`) | D:399–402 |
 | 7 | 7:0 | 8 | — | Cadence | RPM | D:404–405 |
-| 8 | 7:0 | 8 | LE low | Pedal torque low | Combined8–9 /100 under torque_x100 convention; Nm not explicitly established by ESP32 arithmetic | D:407–410 |
+| 8 | 7:0 | 8 | LE low | Pedal torque low | Combined8–9 /100Nm, deltaADC×factor (S:1241–1242; STM8 `src/main.h:168–175`) | D:407–410 |
 | 9 | 7:0 | 8 | LE high | Pedal torque high | Same16-bit value | D:408 |
 | 10 | 7:0 | 8 | — | Motor temperature | Whole°C under gateway convention; stored×10 only if ESP32 temp control off and optional ADC=1; otherwise ignored | D:412–414,423–426 |
-| 11 | 7:0 | 8 | — | PWM duty | Raw0..255; percentage normalization/max duty UNKNOWN | D:430–431 |
+| 11 | 7:0 | 8 | — | PWM duty | Raw control code cap254, modulation fraction/256, not literal percent (S:457–459; STM8 `src/motor.c:414–427`) | D:430–431 |
 | 12 | 7:0 | 8 | LE low | Motor ERPS low | Combined12–13 electrical rotations/sec by source comment, no multiplier | D:433–434 |
 | 13 | 7:0 | 8 | LE high | Motor ERPS high | Same16-bit value | D:434 |
-| 14 | 7:0 | 8 | — | Field weakening Hall counter offset | Raw; time unit UNKNOWN | D:436–437 |
-| 15 | 7:0 | 8 | — | Firmware version (type0) | Numeric byte, packing UNKNOWN; cached initial255 means not yet received | D:128,443; C:131 `get_app_version` |
-| 16 | 7:0 | 8 | LE low | Torque ADC (type0) | Combined16–17 rawADC; effective resolution UNKNOWN | D:445–446 |
+| 14 | 7:0 | 8 | — | Field weakening Hall counter offset | 4µs/tick, controller cap6 (S:1879; STM8 `src/main.h:113`, `src/timers.c:54–63`) | D:436–437 |
+| 15 | 7:0 | 8 | — | Firmware version (type0) | NumericFW17, no dotted packing; gateway cached initial255 means not received (S:1885; STM8 `src/main.h:15`) | D:128,443; C:131 `get_app_version` |
+| 16 | 7:0 | 8 | LE low | Torque ADC (type0) | Combined16–17 right-aligned10-bit channel4 (S:1887–1890; STM8 `src/adc.c:26`, `src/motor.c:667–668`) | D:445–446 |
 | 17 | 7:0 | 8 | LE high | Torque ADC high | Same16-bit value | D:446 |
-| 18 | 7:0 | 8 | — | Optional ADC (type0) | Raw8-bit `ui8_adc_throttle`; calibration UNKNOWN | D:448–449 |
-| 19 | 7:0 | 8 | — | Throttle/temp mapped field (type0) | Comment says mapped0..255 and unused by Android; physical mapping UNKNOWN | D:451–453 |
+| 18 | 7:0 | 8 | — | Optional ADC (type0) | Right-aligned10-bit optionalADC channel7>>2 (S:1892–1893; STM8 `src/adc.c:26`) | D:448–449 |
+| 19 | 7:0 | 8 | — | Throttle-only mapped field (type0) | THROTTLE_CONTROL: ADC8-bit47..176→0..255; all other functions send0 (S:959–965,1895–1899); ESP32 comment overbroad | D:451–453 |
 | 20 | 7:0 | 8 | — | Torque Smooth (type0) | Comment: active percentage over last2sec; copied without range check | D:455–456 |
 | 21 | 7:0 | 8 | — | Extended selector (type0) | 0..3 handled; others UNKNOWN | D:458–488 |
 | 22 | 7:0 | 8 | Per selector | Extended byte0 | Table below | D:459–488 |
@@ -240,30 +268,41 @@ still count as valid reception if CRC passes (U:132–138). Type0 clears Hall-va
 
 ### Extended data for normal type0 (selector byte21)
 
-All byte fields use bits7:0. UNUSED means unread by this gateway branch, not a
-proven STM8 reservation. Source function: D:`processControllerMessage`.
+All byte fields use bits7:0. UNUSED means no decoded field in the selected branch,
+not missing bytes or exemption from CRC. Source function: D:`processControllerMessage`.
 
 | Selector | Offsets | Width | Endian | Field/scaling | Source |
 |---|---|---|---|---|---|
-| 0 | 22 low,23 middle,24 high | 24 | LE | Wheel revolutions, raw count | D:460–464 |
+| 0 | 22 low,23 middle,24 high | 24 decoded /20 produced | LE | Wheel sensor count; STM8 byte24 high nibble0, effective wrap2^20 | D:460–464; S:1906–1909 |
 | 0 | 25 low,26 high | 16 | LE | Crank revolutions, raw count | D:466–467 |
-| 1 | 22 | 8 | — | TorqueAVG; physical unit UNKNOWN | D:469–473 |
-| 1 | 23 | 8 | — | TorqueMin; physical unit UNKNOWN | D:472 |
-| 1 | 24 | 8 | — | TorqueMax; physical unit UNKNOWN | D:473 |
-| 1 | 25,26 | 2×8 | — | UNKNOWN / UNUSED | D:469–474 |
-| 2 | 22,23,24,25,26 | 5×8 | — | PWM time debug1..5; individual meanings/units UNKNOWN | D:475–481 |
-| 3 | 22,23 | 2×8 | — | Hall error debug1..2; individual meanings UNKNOWN | D:483–486 |
-| 3 | 24,25,26 | 3×8 | — | UNKNOWN / UNUSED | D:483–487 |
+| 1 | 22 | 8 | — | TorqueAVG deltaADC over80 transition samples, not Nm (S:1122–1185) | D:469–473 |
+| 1 | 23 | 8 | — | TorqueMin deltaADC, clipped255 samples (S:1157–1185) | D:472 |
+| 1 | 24 | 8 | — | TorqueMax deltaADC, clipped255 samples (S:1157–1185) | D:473 |
+| 1 | 25,26 | 2×8 | — | UNUSED by both sides, stale buffer values in STM8 | D:469–474; S:1928–1933 |
+| 2 | 22;23–24;25–26 | 8;16;16 | —;LE;LE | Max main-loop TIM4 ticks; PWM-down max; PWM-up max. Disabled/unbuilt debug durations unvalidated | D:475–481; S:1801–1820,1917–1923; STM8 `src/main.c:105–116` |
+| 3 | 22,23 | 2×8 | — | Invalid Hall state / unexpected sequence8-bit wrapping counters (S:1924–1927; STM8 `src/motor.c:259–321`) | D:483–486 |
+| 3 | 24,25,26 | 3×8 | — | UNUSED by both sides, stale buffer values in STM8 | D:483–487; S:1924–1927 |
 | Other | 22..26 | 5×8 | UNKNOWN | No default decoder | D:459–488 |
 
 Selector1 sets debugFlags0;2 sets0x20;3 sets0x40;0 does not reset flags.
 Unassigned state fields retain previous values (D:459–488).
 
+**STM8-SIDE ONLY:** normal TX alternates selector0 with selector1 by default;
+TIME_DEBUG selects2 instead, otherwise HALL_DEBUG selects3. It does not rotate
+all four selectors (S:1904–1933; STM8 `src/main.h:12–13`, both macros off).
+Crank field is low16 bits of crank_x20/20. Torque stats are ADC deltas from the
+previous completed80-sample stroke; sum uses unclipped delta while sample buffer
+and min/max clip255 (S:1122–1185). Torque Smooth byte20 is cached; recalculated
+after field copy each20 normal TX frames as `(smooth_count*10)>>3`, nominal2sec
+(S:1901–1902,1936–1941). Debug configuration has unvalidated physical durations and
+a missing semicolon in disabled TIME_DEBUG path; see cross-check §5/9.
+
 ### Type1 Hall calibration overlay
 
 Bytes0..14 and27..28 remain common; bytes15..26 replace **all** normal-specific
-fields including version and extended selector. Values are raw counters; physical
-time unit and mapping to physical Hall states are UNKNOWN.
+fields including version and extended selector. Both-side overlay confirmed at
+S:1944–1962. Controller counters are last-transition intervals, modulo16-bit,4µs
+ticks, order Hall states6,2,3,1,5,4 (STM8 `src/motor.c:241–312`, `src/timers.c:54–63`).
 
 | Low offset | High offset | Bits each | Width | Endian | Field | Source |
 |---|---|---|---|---|---|---|
@@ -276,7 +315,8 @@ time unit and mapping to physical Hall states are UNKNOWN.
 
 D:498 sets `hall_calib_data_valid=1`; M:`mainTask`:100–104 notifies packed
 `tsdz_hall` over BLE then clears the flag. Do not infer incoming counter order from
-outgoing Hall-reference array order.
+outgoing Hall-reference array order without evidence; selected STM8 `src/motor.c`
+now explicitly proves the corresponding order6,2,3,1,5,4.
 
 ## D. Exact CRC implementation and executed vectors
 
@@ -349,6 +389,13 @@ with tempfile.TemporaryDirectory() as td:
 The separately named OEM `crc8` is merely addition modulo256
 (`tsdz_utils.c:69–75`); do not confuse it with the STM8-link CRC.
 
+**VERIFIED BOTH SIDES:** STM8 `src/common.c:92–104`, `crc16`, has identical
+parameters/bit processing; S:1583–1591,1966–1974 proves matching init, coverage and
+LE byte order. Both original C bodies were compiled together with isolated names
+and executed: all three vectors above and1024 additional deterministic inputs
+matched. Test recipe and scope are recorded in cross-check §6; no firmware/device
+execution is claimed.
+
 ## E. Controller status/error
 
 Wire byte1 differs from the local system-state byte (D:369–383
@@ -366,16 +413,17 @@ Wire byte1 differs from the local system-state byte (D:369–383
 | Value | Known symbol | Qualification |
 |---|---|---|
 | 0 | NO_ERROR | No controller nibble error |
-| 1 | ERROR_MOTOR_BLOCKED | Defined MH:33 |
-| 2 | ERROR_TORQUE_SENSOR | Defined MH:34 |
-| 7 | ERROR_BATTERY_OVERCURRENT | Defined MH:35 |
-| 8 | ERROR_OVERVOLTAGE | Defined MH:36; may be synthesized locally |
-| 9 | ERROR_TEMPERATURE_LIMIT | Defined MH:37; may be synthesized locally |
-| 10 | ERROR_TEMPERATURE_MAX | Defined MH:38; may be synthesized locally |
+| 1 | ERROR_MOTOR_BLOCKED | Both sides; STM8 current>5A, ERPS<10 for>20 checks; reset>200 checks (S:1245–1305) |
+| 2 | ERROR_TORQUE_SENSOR | Both sides; STM8 offset outside10..300 or torqueADC>500 in POWER/TORQUE/eMTB (S:1310–1318) |
+| 7 | ERROR_BATTERY_OVERCURRENT | Both sides; raw currentADC low byte≥156, latched (S:1254–1267) |
+| 8 | ERROR_OVERVOLTAGE | ESP32-SIDE ONLY; not defined/emitted by selected STM8 |
+| 9 | ERROR_TEMPERATURE_LIMIT | ESP32-SIDE ONLY; not defined/emitted by selected STM8 |
+| 10 | ERROR_TEMPERATURE_MAX | ESP32-SIDE ONLY; not defined/emitted by selected STM8 |
 | 3–6,11–15 | UNKNOWN | No named meanings here |
 
 D:419–427 synthesizes8/9/10 only if the received nibble was0, after battery/temp
-checks. Local display of these codes does not prove STM8 emitted them.
+checks. STM8 `src/common.h:23–26` and S:`check_system`:1250–1319 only define/produce
+0/1/2/7. Codes3–6/11–15 are unassigned here, not known controller faults.
 CRC error counter, controller-reported RX-error bit, and local timeout are distinct.
 Correction: MH:28–30 comments about bits0–5/brake6/status7–8 are stale; actual
 masks/parser prove the layout above. OEM display error translation is a separate
@@ -399,7 +447,8 @@ Actual UART values from MH:16–24 and D:`getControllerMessage`:511–567:
 Do not substitute app override values (MH:68–73). Internal street bit7 is masked
 out of wire byte2 and instead influences limits/throttle. OEM/app mode selection
 is in D:`processLcdMessage`:201–267, including walk below8.0km/h and cruise
-above9.0km/h under its conditions (MH:75–76). STM8 control laws remain unverified.
+above9.0km/h under its conditions (MH:75–76). Selected STM8 mode computations
+are source-verified in cross-check §3; actual motor performance is not measured.
 
 ## G. Existing OTA handoff
 
@@ -435,15 +484,25 @@ above9.0km/h under its conditions (MH:75–76). STM8 control laws remain unverif
    progress,4 error (CH:30–38; O:815–894). Success/error paths restart after1sec.
    Android `Stm8_Ota.java:487–527`, `onMessageEvent`, consumes those notifications.
 
-Actual STM8 reboot reaction, bootloader window, ROM compatibility and physical
-flashing are **ESP32-side verified only / not hardware verified**. O:728–730's
-one-second window is a comment, not measurement or independent STM8 proof.
-No bootloader simulator or full independently verified OTA wire contract is specified.
+**VERIFIED BOTH SIDES reset flag:** S:1665–1682 only processes ID1 byte6 bit7 when
+motor disabled. Two flagged ID1 receptions increment counter to≥2 and write
+`WWDG->CR=WWDG_CR_WDGA`. Valid unflagged ID1 while disabled clears counter; other
+IDs do not. Motor-enabled ID1 does not process the counter. Thus gateway handoff
+cannot prove reset occurred merely from its own two builder calls.
+
+**STM8-SIDE ONLY:** watchdog reset trigger source is present; custom/ROM bootloader
+server source is not present in this selected tree/history search. **ESP32-SIDE
+ONLY:** existing client implements BSL sync, GET/READ, WRITE, GO and uploads RAM
+byte-array routines; see cross-check §10 for source functions, offsets and checksum
+structure. No new flashing protocol is designed here. Actual ROM compatibility,
+option-byte state, window and physical flashing remain **UNKNOWN**. O:728–730's
+one-second window is a comment, not measurement. No full independently verified
+ROM OTA contract or bootloader simulator is specified.
 
 ## Corrections and UNKNOWN inventory
 
-No prior committed packet contract exists here. Corrections concern source/comment
-readings, not a claim that a prior simulator existed:
+The original ESP32 audit is retained in commit `4addc25bf37ad2f6232863c9b7517b695a290e99`.
+Original source/comment corrections remain:
 
 - ESP32 TX25/RX27, despite opposite-looking macro names.
 - ID1 flags are byte6 despite byte5 comment; ID5 bytes8..10 are stale/unassigned,
@@ -452,34 +511,44 @@ readings, not a claim that a prior simulator existed:
 - Wire/local status differ; executable masks supersede stale MH comments.
 - OTA has no STM8 acceptance check before suspension; `bsl_sync` return1 is success.
 
-All controller semantics are **ESP32-side verified only**. Explicit unknowns:
+Resolved by pinned STM8 source: ID5 tail has no semantic reads; lights enums0..8;
+assist meanings/clamps; acceleration inverse-step mapping; no-pedal ADC threshold;
+torque conversion formula;256-code angle scale and4µs counters; rawADC resolution;
+throttle-only byte19; numericFW17; selector alternation and true debug packing;
+20-bit effective wheel counter; Hall intervals/state order; emitted errors0/1/2/7;
+nominal100ms TX, conditional command-loss policy and watchdog reset gate.
 
-- Electrical levels/tolerance, actual STM8 UART settings, normal STM8 TX cadence,
-  timing tolerances, controller processing/control laws and safe allowed ranges.
-- ID5 bytes8..10 purpose; individual lights configurations; TORQUE/eMTB/WALK and
-  calibration assist physical scales; inductance conversion; acceleration units;
-  no-pedal threshold scale; torque ADC calibration formula; angle-code/counter
-  units and signed interpretation.
-- Message types2/3; selectors outside0..3; unused selector1 bytes25..26 and selector3
-  bytes24..26; individual debug meanings/scales; torque statistics units; torque
-  physical calibration; FOC angular scale; PWM percent normalization; ADC effective
-  resolution/calibration; optional mapped field conversion; firmware version packing;
-  incoming Hall counter units/physical state order.
-- Error codes3–6/11–15 and which named errors STM8 actually emits. Locally synthesized
-  errors must be distinguished from received errors.
-- STM8 OTA request acceptance, bootloader compatibility and measured timings.
+Conflicts/asymmetries, recorded without code changes (cross-check §9):
+
+- **STM8-SIDE ONLY WIP defect:** brake source is forced0 and startup brake hold
+  disabled, despite valid brake bit definition; parser fault injection is a test override.
+- ESP32 byte19 throttle/temp comment is overbroad; STM8 emits throttle only, else0.
+- 24-bit ESP32 wheel decoder accepts a20-bit STM8 counter. POWER nominal2% is an
+  integer approximation, not an exact control multiplier.
+- STM8 treats first Hall payload byte0 as whole-array reset. ESP32 all-zero refs
+  plus nonzero phase adjustment can cease to encode that reset (D:663–685 ↔ S:1722–1735).
+- Command loss retains normal modes1..4, unlike a blanket shutdown assumption.
+  OTA request is gated on STM8 motor-disabled state and has no acceptance ACK.
+- Disabled TIME_DEBUG has a missing semicolon and stale timing constants; it was
+  not build-verified, so actual debug duration interpretation remains unvalidated.
+
+**UNKNOWN** still includes electrical levels/tolerance and device timings; physical
+sensor/calibration accuracy; inductance associated with FOC coefficient;
+physical DEADTIME_TEST timing; stable
+released-v17 binary/source pairing; ROM bootloader implementation, option bytes,
+acceptance/window/compatibility. Types2/3, selectors outside0..3 and unnamed error
+values have no semantics in selected source. Unused extended bytes have no assigned
+meaning. No new unit, reserved-field meaning or ROM protocol is invented.
 
 ## Validation scope
 
-Both packet lengths and all byte positions are accounted for, retaining UNKNOWN
-labels. CRC implementation, coverage and order were traced in producer/validator;
-three vectors executed original C code; the embedded reproduction script was also
-executed successfully with the installed Clang path. No production build or device
-test is claimed. Before commit, both imported tree IDs were verified against their
-upstream commits; all 264 imported files plus `fake-stm8/README.md` were compared
-byte-for-byte with baseline blobs and matched. Git diff showed no tracked-file
-changes and the only new file was this document. The baseline branch remained at
-`08b4020eec73e463b3c16262f69b92c7c00e16e4`.
+Both packet lengths/all byte positions are accounted for. The initial audit
+executed three vectors from ESP32 original C and verified all264 imported files
+plus Fake README against baseline. This cross-check executes **both** original
+CRC functions on those vectors and1024 deterministic inputs. No firmware build,
+device operation or OTA flash is claimed. Changes are restricted to this document
+and `STM8_PROTOCOL_CROSSCHECK.md`; baseline/main and original audit commit are
+preserved, with production trees/working bytes checked before commit.
 
 ## Fake STM8 v1 minimum behavior
 
@@ -491,14 +560,27 @@ Future requirements only; no simulator source is included:
   unknown bytes; do not require ID5 bytes8..10 to be zero or invent their meaning.
 - Generate legal29-byte type0 status with0x43 header, packed speed/FOC, LE fields,
   selector0/1/2/3 payload shapes and generated CRC27/28 low/high.
-- Periodic configurable telemetry sufficient to avoid >500ms gateway timeout;
-  do not call a chosen simulator cadence a proven STM8 requirement.
+- Periodic telemetry matching selected STM8 nominal100ms scheduler, not a response
+  required for every command; alternate selector0 with1 (or configured debug2/3).
 - Fault injection: bad CRC, dropped/partial frames, brake state, controller UART
   receive-error bit and known controller error nibble, independently controllable.
 - Pause TX to trigger >500ms communication timeout, then resume valid telemetry
   and verify recovery; distinguish it from UART-error bit and CRC-error counter.
 - Serial logging: timestamps, raw TX/RX, ID/mode/assist, CRC results, unknown bytes,
   fault settings and pause/resume events.
-- If later testing Hall calibration, use type1 overlay without invented units.
+- If later testing Hall calibration, use type1 overlay with4µs intervals in Hall
+  order6,2,3,1,5,4.
   Log OTA handoff requests; do not implement or guess STM8 flashing as part of
   minimum normal-UART simulation.
+
+## Fake STM8 compatibility requirements
+
+The full future requirements are in [cross-check §11](STM8_PROTOCOL_CROSSCHECK.md#11-fake-stm8-compatibility-requirements).
+They extend parser acceptance to actual controller behavior: numericFW17; consumer
+clamps and zero sentinels; ignored ID5 tail still covered by CRC;20-bit wheel count;
+ADC/torque/duty/angle conversions; selector alternation/cached Torque Smooth timing;
+mode7 Hall overlay; controller command timeout with retained normal modes and valid
+CRC recovery; two OTA ID1 requests only while motor disabled. Source-faithful v17
+defaults brake0; deliberate brake injection is labeled test override. Gateway-local
+errors8/9/10 and timeout0x80 must not be presented as STM8-defined error codes.
+No simulator source or ROM flashing server is implemented in this audit.
