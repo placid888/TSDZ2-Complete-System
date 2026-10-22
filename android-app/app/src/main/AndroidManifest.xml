@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="spider65.ebike.tsdz2_esp32">
+
+    <!-- Legacy Bluetooth permissions (pre Android 12). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+
+    <!-- New BLE Permissions (>= Android 12) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <uses-permission
+        android:name="android.permission.WRITE_SETTINGS"
+        android:maxSdkVersion="25"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        android:maxSdkVersion="25"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:name=".MyApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+        <activity
+            android:name=".activities.HallCalibrationActivity"
+            android:label="@string/hall_calib"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.ESP32ConfigActivity"
+            android:label="@string/title_activity_esp32_config"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.SystemSetupActivity"
+            android:label="@string/title_activity_system_setup"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.TorqueSetupActivity"
+            android:label="@string/title_activity_torque_setup"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.BatterySetupActivity"
+            android:label="@string/title_activity_battery_setup"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.LevelsSetupActivity"
+            android:label="@string/title_activity_levels_setup"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.TemperatureSetupActivity"
+            android:label="@string/title_activity_temperature_setup"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".activities.TSDZCfgActivity"
+            android:theme="@style/AppTheme.NoActionBar" />
+        <activity
+            android:name=".ota.Esp32_Ota"
+            android:label="@string/title_activity_esp32_ota"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".ota.Stm8_Ota"
+            android:label="@string/title_activity_stm8_ota"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.ChartActivity"
+            android:label="@string/title_activity_chart"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.BluetoothSetupActivity"
+            android:label="@string/title_activity_bluetooth_setup"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.MotorTestActivity"
+            android:label="@string/motorTest"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.ShowDebugInfo"
+            android:label="@string/debug_info"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".activities.MotorSetupActivity"
+            android:label="@string/motorTuning"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".MainActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/AppTheme.NoActionBar"
+            tools:ignore="LockedOrientationActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".TSDZBTService"
+            android:enabled="true"
+            android:exported="false" />
+    </application>
+
+</manifest>

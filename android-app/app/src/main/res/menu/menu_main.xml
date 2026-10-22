@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:context="example.javatpoint.com.optionmenu.MainActivity">
+
+    <item  android:id="@+id/config"
+        android:title="@string/config"/>
+    <item  android:id="@+id/esp32Config"
+        android:title="@string/esp32_config" />
+    <item
+        android:id="@+id/btSetup"
+        android:title="@string/btSetup" />
+    <item android:title="@string/firmware">
+        <menu >
+            <item
+                android:id="@+id/showVersion"
+                android:title="@string/show_version" />
+            <item
+                android:id="@+id/espOTA"
+                android:title="@string/espOTA" />
+            <item
+                android:id="@+id/bikeOTA"
+                android:title="@string/bikeOTA" />
+        </menu>
+    </item>
+    <item android:title="@string/debug" >
+        <menu >
+            <item
+                android:id="@+id/showDebug"
+                android:title="@string/show_debug" />
+            <item
+                android:id="@+id/motorTest"
+                android:title="@string/motorTest" />
+        </menu>
+    </item>
+    <item
+        android:id="@+id/screenONCB"
+        android:checkable="true"
+        android:title="@string/alwaysOn"
+        android:checkableBehavior="single"
+        app:actionViewClass="android.widget.CheckBox"/>
+</menu>
